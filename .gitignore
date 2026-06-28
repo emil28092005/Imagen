@@ -17,7 +17,8 @@ output/
 feedback.db
 feedback_dataset.jsonl
 
-# IDE
+# pytest
+.pytest_cache/
 .idea/
 .vscode/
 *.swp

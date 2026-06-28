@@ -41,7 +41,7 @@ class FeedbackDB:
 
     @classmethod
     def open(cls, path: str) -> "FeedbackDB":
-        conn = sqlite3.connect(path)
+        conn = sqlite3.connect(path, check_same_thread=False)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS feedback (
                 id TEXT PRIMARY KEY,

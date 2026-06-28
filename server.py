@@ -145,12 +145,11 @@ def _generate(
 def _remove_background(image: Image.Image, threshold: int = 30) -> Image.Image:
     """Remove background using flood-fill from edges.
 
-    Two-pass approach:
-    1. Detect border color, replace all near-border pixels with a flat fill color
-    2. Flood-fill from edges to remove the flat color cleanly
-
-    This normalizes gradient/noisy backgrounds into one solid color,
-    making flood-fill removal much cleaner.
+    Detects the border color, then flood-fills from all edge pixels,
+    removing any pixel that is within threshold of the border color AND
+    connected to the border. Interior pixels with similar colors (e.g.
+    highlights on armor) are preserved because they are not connected
+    to the border through similar-colored pixels.
     """
     from collections import deque
 
@@ -170,19 +169,9 @@ def _remove_background(image: Image.Image, threshold: int = 30) -> Image.Image:
     border_colors = np.array(border_colors)
     bg_color = np.median(border_colors, axis=0).astype(int)
 
-    # Pass 1: normalize background — replace all pixels within threshold
-    # of border color with a flat fill color (pure magenta, unlikely in sprites)
-    fill_color = np.array([255, 0, 255], dtype=int)
-    dist_to_bg = np.abs(arr - bg_color).sum(axis=2)
-    bg_mask = dist_to_bg < threshold * 3
-    arr[bg_mask] = fill_color
-
-    # Pass 2: flood-fill from edges to remove connected fill_color regions
     alpha = np.full((h, w), 255, dtype=np.uint8)
     visited = np.zeros((h, w), dtype=bool)
     queue = deque()
-
-    fill_dist_threshold = 30  # tolerance for near-fill pixels
 
     # Seed from all border pixels
     for x in range(w):
@@ -196,11 +185,11 @@ def _remove_background(image: Image.Image, threshold: int = 30) -> Image.Image:
                 queue.append((y, x))
                 visited[y, x] = True
 
-    # BFS flood-fill
+    # BFS flood-fill: remove pixels close to bg_color that are connected to border
     while queue:
         y, x = queue.popleft()
-        dist = np.abs(arr[y, x] - fill_color).sum()
-        if dist > fill_dist_threshold:
+        dist = np.abs(arr[y, x] - bg_color).sum()
+        if dist > threshold * 3:
             continue
         alpha[y, x] = 0
 
@@ -210,11 +199,6 @@ def _remove_background(image: Image.Image, threshold: int = 30) -> Image.Image:
                 visited[ny, nx] = True
                 queue.append((ny, nx))
 
-    # Clean up: any remaining near-magenta pixels that weren't flood-filled
-    # (small isolated background pockets) get removed too
-    remaining_bg = np.abs(arr - fill_color).sum(axis=2) < fill_dist_threshold
-    alpha[remaining_bg] = 0
-
     rgba = np.dstack([arr.astype(np.uint8), alpha])
     return Image.fromarray(rgba, mode="RGBA")
 
@@ -223,7 +207,10 @@ def _pixelate(image: Image.Image, pixel_size: int = 8) -> Image.Image:
     """Downscale then upscale with NEAREST to create chunky pixel-art effect.
 
     pixel_size=8 means each "pixel" in the result is an 8x8 block.
+    pixel_size=0 returns the original image unchanged.
     """
+    if pixel_size <= 0:
+        return image
     w, h = image.size
     small = image.resize((w // pixel_size, h // pixel_size), Image.LANCZOS)
     return small.resize((w, h), Image.NEAREST)
