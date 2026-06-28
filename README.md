@@ -1,4 +1,4 @@
-# Imagegen
+# Imagen
 
 MCP server for generating pixel-art sprites using FLUX.2-klein-4B + [pixel-art-lora](https://huggingface.co/Limbicnation/pixel-art-lora).
 
