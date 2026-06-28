@@ -3,4 +3,7 @@ diffusers>=0.37.0
 transformers
 accelerate
 torch
+peft
 pillow
+numpy
+dearpygui

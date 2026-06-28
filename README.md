@@ -70,6 +70,20 @@ export IMAGEGEN_OUTPUT_DIR=/path/to/output
 ./venv/bin/python server.py
 ```
 
+### 5. Review & rate sprites (GUI)
+
+```bash
+./venv/bin/pip install dearpygui pillow
+./venv/bin/python review_gui.py
+```
+
+Features:
+- Thumbnail preview of each generated sprite
+- Star rating (1-5) with one click
+- Text feedback per sprite
+- Filter: all / unrated / top rated
+- Export rated dataset as JSONL for fine-tuning
+
 Or configure in your MCP client:
 
 ```json
