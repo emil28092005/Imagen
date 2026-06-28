@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MCP server for generating pixel-art sprites using FLUX.2-klein-4B + pixel-art-lora.
+MCP server for generating pixel-art sprites using SDXL + LCM + pixel-art-xl LoRA.
 
 Tools:
   - generate_sprite:       Generate a single pixel-art sprite
@@ -10,7 +10,7 @@ Tools:
   - list_sprites:          List sprites in the feedback DB (all, unrated, or top-rated)
   - db_stats:              Get feedback database statistics
 
-Model is loaded lazily on first call (~6s), then stays in VRAM for speed.
+Model is loaded lazily on first call (~12s), then stays in VRAM for speed.
 Background is removed post-generation to produce transparent PNG.
 Every generated sprite is automatically saved to the feedback DB (unrated).
 """
@@ -30,17 +30,25 @@ from feedback import FeedbackDB
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.environ.get(
     "IMAGEGEN_MODEL_DIR",
-    os.path.join(os.path.expanduser("~"), "models", "flux2-klein-4b"),
+    os.path.join(os.path.expanduser("~"), "models", "sdxl-base"),
 )
 LORA_DIR = os.environ.get(
     "IMAGEGEN_LORA_DIR",
-    os.path.join(os.path.expanduser("~"), "models", "pixel-art-lora"),
+    os.path.join(os.path.expanduser("~"), "models", "pixel-art-xl"),
+)
+LCM_LORA_DIR = os.environ.get(
+    "IMAGEGEN_LCM_LORA_DIR",
+    os.path.join(os.path.expanduser("~"), "models", "lcm-lora-sdxl"),
 )
 OUTPUT_DIR = os.environ.get("IMAGEGEN_OUTPUT_DIR", os.path.join(BASE_DIR, "output"))
 DB_PATH = os.environ.get("IMAGEGEN_DB_PATH", os.path.join(BASE_DIR, "feedback.db"))
 
-# rsLoRA requires much lower scale in diffusers — 1.0 produces black images
-LORA_SCALE = 0.1
+# LoRA scales — pixel-art-xl needs 1.2, LCM needs 1.0
+PIXEL_LORA_SCALE = 1.2
+LCM_LORA_SCALE = 1.0
+
+# Negative prompt to improve quality
+NEGATIVE_PROMPT = "3d render, realistic, detailed, noise, artifacts, blurry, text"
 
 # Global state — model loaded lazily
 _pipe = None
@@ -76,20 +84,30 @@ def _load_model():
     if _pipe is not None:
         return _pipe
 
-    sys.stderr.write("[pixel-art] Loading FLUX.2-klein-4B + LoRA (first call)...\n")
+    sys.stderr.write(
+        "[pixel-art] Loading SDXL + LCM + pixel-art-xl LoRA (first call)...\n"
+    )
     t0 = time.time()
 
     import torch
-    from diffusers import Flux2KleinPipeline
+    from diffusers import StableDiffusionXLPipeline, LCMScheduler
 
-    _pipe = Flux2KleinPipeline.from_pretrained(
+    _pipe = StableDiffusionXLPipeline.from_pretrained(
         MODEL_DIR,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch.float16,
+        use_safetensors=True,
+        variant="fp16",
     )
-    _pipe.load_lora_weights(LORA_DIR)
+    _pipe.scheduler = LCMScheduler.from_config(_pipe.scheduler.config)
+
+    _pipe.load_lora_weights(LCM_LORA_DIR, adapter_name="lcm")
+    _pipe.load_lora_weights(LORA_DIR, adapter_name="pixel")
+    _pipe.set_adapters(
+        ["lcm", "pixel"], adapter_weights=[LCM_LORA_SCALE, PIXEL_LORA_SCALE]
+    )
 
     if _get_device() == "cuda":
-        _pipe.enable_model_cpu_offload()
+        _pipe.to("cuda")
     else:
         _pipe.to(_get_device())
 
@@ -99,7 +117,7 @@ def _load_model():
 
 
 def _build_prompt(user_prompt: str) -> str:
-    return f"pixel art sprite, {user_prompt}, game asset, transparent background"
+    return f"pixel art, {user_prompt}, simple, flat colors, game asset"
 
 
 def _generate(
@@ -109,16 +127,16 @@ def _generate(
 
     generator = None
     if seed is not None:
-        generator = torch.Generator(device=_get_device()).manual_seed(seed)
+        generator = torch.Generator(device="cuda").manual_seed(seed)
 
     image = pipe(
         prompt=prompt,
+        negative_prompt=NEGATIVE_PROMPT,
         num_inference_steps=steps,
-        guidance_scale=1.0,
+        guidance_scale=1.5,
         height=height,
         width=width,
         generator=generator,
-        attention_kwargs={"scale": LORA_SCALE},
     ).images[0]
 
     return image
@@ -228,7 +246,7 @@ def generate_sprite(
     seed: Optional[int] = None,
     width: int = 512,
     height: int = 512,
-    steps: int = 4,
+    steps: int = 8,
     remove_bg: bool = True,
     pixel_size: int = 4,
 ) -> dict:
@@ -307,7 +325,7 @@ def batch_generate(
           - seed:        int   (optional)
           - width:       int   (optional, default 512)
           - height:      int   (optional, default 512)
-          - steps:       int   (optional, default 4)
+          - steps:       int   (optional, default 8)
           - remove_bg:   bool  (optional, default True)
           - pixel_size:  int   (optional, default 4, 0=off)
 
@@ -323,7 +341,7 @@ def batch_generate(
         seed = spec.get("seed")
         width = spec.get("width", 512)
         height = spec.get("height", 512)
-        steps = spec.get("steps", 4)
+        steps = spec.get("steps", 8)
         remove_bg = spec.get("remove_bg", True)
         pixel_size = spec.get("pixel_size", 4)
 
