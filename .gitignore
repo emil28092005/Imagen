@@ -1,0 +1,33 @@
+# venv
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Output (generated sprites)
+output/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models (not included — download separately)
+models/
+*.safetensors
+*.bin
+*.ckpt
+
+# opencode local config (keep .opencode/opencode.json)
+.opencode/session*

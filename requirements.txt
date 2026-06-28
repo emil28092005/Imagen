@@ -1,0 +1,6 @@
+mcp>=1.27,<2
+diffusers>=0.37.0
+transformers
+accelerate
+torch
+pillow
