@@ -20,7 +20,7 @@ THUMB_SIZE = 96
 
 _db = FeedbackDB.open(DB_PATH)
 _entries = []
-_thumbnails = {}
+_thumbnails = set()
 _filter = "all"
 _texture_registry = None
 
@@ -28,9 +28,9 @@ _texture_registry = None
 def _load_thumbnail(path, tag):
     if not path or not os.path.exists(path):
         return False
-    if dpg.does_item_exist(tag):
-        return True
     try:
+        if dpg.does_item_exist(tag):
+            dpg.delete_item(tag)
         img = Image.open(path).convert("RGBA")
         img.thumbnail((THUMB_SIZE, THUMB_SIZE), Image.NEAREST)
 
@@ -48,7 +48,7 @@ def _load_thumbnail(path, tag):
             tag=tag,
             parent=_texture_registry,
         )
-        _thumbnails[tag] = True
+        _thumbnails.add(tag)
         return True
     except Exception:
         return False
@@ -71,6 +71,10 @@ def _refresh():
     )
 
     dpg.delete_item("sprite_list", children_only=True)
+    for tag in list(_thumbnails):
+        if dpg.does_item_exist(tag):
+            dpg.delete_item(tag)
+    _thumbnails.clear()
 
     if not _entries:
         dpg.add_text(
@@ -236,7 +240,7 @@ def _save_feedback_by_id(sender, app_data, user_data):
     feedback = dpg.get_value(fb_tag) if dpg.does_item_exist(fb_tag) else ""
     rating = _get_current_rating(entry_id)
     _db.update_rating(entry_id, rating, feedback if feedback else None)
-    _refresh()
+    # Don't refresh the whole UI — preserves text in other feedback fields.
 
 
 def _delete_by_id(sender, app_data, user_data):
