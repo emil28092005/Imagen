@@ -28,6 +28,8 @@ _texture_registry = None
 def _load_thumbnail(path, tag):
     if not path or not os.path.exists(path):
         return False
+    if dpg.does_item_exist(tag):
+        return True
     try:
         img = Image.open(path).convert("RGBA")
         img.thumbnail((THUMB_SIZE, THUMB_SIZE), Image.NEAREST)
@@ -108,54 +110,90 @@ def _build_entry_row(entry):
                     dpg.add_text(p, color=(100, 100, 100))
                     dpg.add_spacer(height=4)
 
-                with dpg.group(horizontal=True):
-                    for star in range(1, 6):
-                        filled = star <= entry.rating
-                        label = "\u2605" if filled else "\u2606"
-                        color = (255, 200, 80) if filled else (80, 80, 90)
-                        btn_tag = f"star_{entry.id}_{star}"
-                        dpg.add_button(
-                            label=label,
-                            tag=btn_tag,
-                            callback=lambda s, a, e=entry: _rate(e, s),
-                            width=28,
-                            height=24,
-                        )
-                        dpg.bind_item_theme(btn_tag, _star_theme(color))
+                with dpg.table(
+                    header_row=False,
+                    policy=dpg.mvTable_SizingFixedFit,
+                    no_host_extendX=True,
+                    row_background=False,
+                    borders_innerH=False,
+                    borders_outerH=False,
+                    borders_innerV=False,
+                    borders_outerV=False,
+                ):
+                    dpg.add_table_column(width=28, init_width_or_weight=28)
+                    dpg.add_table_column(width=28, init_width_or_weight=28)
+                    dpg.add_table_column(width=28, init_width_or_weight=28)
+                    dpg.add_table_column(width=28, init_width_or_weight=28)
+                    dpg.add_table_column(width=28, init_width_or_weight=28)
+                    dpg.add_table_column(width=50, init_width_or_weight=50)
+                    dpg.add_table_column(width=220, init_width_or_weight=220)
+                    dpg.add_table_column(width=65, init_width_or_weight=65)
+                    dpg.add_table_column(width=50, init_width_or_weight=50)
+                    dpg.add_table_column(width=50, init_width_or_weight=50)
 
-                    dpg.add_spacer(width=8)
+                    with dpg.table_row():
+                        for star in range(1, 6):
+                            filled = star <= entry.rating
+                            label = "*" if filled else "o"
+                            btn_tag = f"star_{entry.id}_{star}"
+                            with dpg.table_cell():
+                                dpg.add_button(
+                                    label=label,
+                                    tag=btn_tag,
+                                    callback=_rate_by_id,
+                                    user_data=(entry.id, star),
+                                    width=24,
+                                    height=24,
+                                )
 
-                    rating_text = (
-                        f"{entry.rating}\u2605" if entry.rating > 0 else "unrated"
-                    )
-                    dpg.add_text(rating_text, tag=f"rating_label_{entry.id}")
+                        with dpg.table_cell():
+                            rating_text = (
+                                f"{entry.rating}*" if entry.rating > 0 else "unrated"
+                            )
+                            dpg.add_text(rating_text, tag=f"rating_label_{entry.id}")
 
-                    dpg.add_spacer(width=12)
+                        with dpg.table_cell():
+                            dpg.add_input_text(
+                                hint="feedback...",
+                                default_value=entry.feedback or "",
+                                tag=f"feedback_{entry.id}",
+                                width=200,
+                                height=24,
+                            )
 
-                    dpg.add_input_text(
-                        hint="feedback...",
-                        default_value=entry.feedback or "",
-                        tag=f"feedback_{entry.id}",
-                        width=200,
-                        height=24,
-                    )
+                        with dpg.table_cell():
+                            dpg.add_button(
+                                label="Save",
+                                callback=_save_feedback_by_id,
+                                user_data=entry.id,
+                                width=55,
+                                height=24,
+                            )
 
-                    dpg.add_spacer(width=4)
+                        with dpg.table_cell():
+                            dpg.add_button(
+                                label="Del",
+                                callback=_delete_by_id,
+                                user_data=entry.id,
+                                width=40,
+                                height=24,
+                            )
 
-                    dpg.add_button(
-                        label="Save",
-                        callback=lambda s, a, e=entry: _save_feedback(e),
-                        width=55,
-                        height=24,
-                    )
+                        with dpg.table_cell():
+                            dpg.add_button(
+                                label="Params",
+                                callback=_toggle_params,
+                                user_data=entry.id,
+                                width=50,
+                                height=24,
+                            )
 
-                    dpg.add_spacer(width=4)
-
-                    dpg.add_button(
-                        label="Del",
-                        callback=lambda s, a, e=entry: _delete(e),
-                        width=40,
-                        height=24,
+                params_group = f"params_{entry.id}"
+                with dpg.group(tag=params_group, show=False):
+                    dpg.add_text(
+                        _format_params(entry.params),
+                        color=(160, 160, 160),
+                        wrap=650,
                     )
 
                 if entry.feedback:
@@ -169,19 +207,6 @@ def _build_entry_row(entry):
         dpg.add_spacer(height=4)
 
 
-def _rate(entry, star_tag):
-    star_num = int(star_tag.split("_")[-1])
-    current = _get_current_rating(entry.id)
-    new_rating = 0 if current == star_num else star_num
-
-    fb_widget = f"feedback_{entry.id}"
-    feedback = dpg.get_value(fb_widget) if dpg.does_item_exist(fb_widget) else ""
-    feedback = feedback if feedback else None
-
-    _db.update_rating(entry.id, new_rating, feedback)
-    _refresh()
-
-
 def _get_current_rating(entry_id):
     for e in _entries:
         if e.id == entry_id:
@@ -189,17 +214,49 @@ def _get_current_rating(entry_id):
     return 0
 
 
-def _save_feedback(entry):
-    fb_tag = f"feedback_{entry.id}"
+def _rate_by_id(sender, app_data, user_data):
+    entry_id, star_num = user_data
+    current = _get_current_rating(entry_id)
+    new_rating = 0 if current == star_num else star_num
+
+    fb_widget = f"feedback_{entry_id}"
+    feedback = dpg.get_value(fb_widget) if dpg.does_item_exist(fb_widget) else ""
+    feedback = feedback if feedback else None
+
+    _db.update_rating(entry_id, new_rating, feedback)
+    _refresh()
+
+
+def _save_feedback_by_id(sender, app_data, user_data):
+    entry_id = user_data
+    fb_tag = f"feedback_{entry_id}"
     feedback = dpg.get_value(fb_tag) if dpg.does_item_exist(fb_tag) else ""
-    rating = _get_current_rating(entry.id)
-    _db.update_rating(entry.id, rating, feedback if feedback else None)
+    rating = _get_current_rating(entry_id)
+    _db.update_rating(entry_id, rating, feedback if feedback else None)
     _refresh()
 
 
-def _delete(entry):
-    _db.delete(entry.id)
+def _delete_by_id(sender, app_data, user_data):
+    entry_id = user_data
+    _db.delete(entry_id)
     _refresh()
+
+
+def _toggle_params(sender, app_data, user_data):
+    entry_id = user_data
+    params_group = f"params_{entry_id}"
+    if dpg.does_item_exist(params_group):
+        current = dpg.is_item_visible(params_group)
+        dpg.configure_item(params_group, show=not current)
+
+
+def _format_params(params: dict) -> str:
+    lines = []
+    for key, value in params.items():
+        if key in ("model", "lora", "lcm") and isinstance(value, str):
+            value = os.path.basename(value)
+        lines.append(f"{key}: {value}")
+    return "\n".join(lines)
 
 
 def _on_filter(sender, app_data):

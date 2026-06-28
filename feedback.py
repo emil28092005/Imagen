@@ -164,6 +164,9 @@ class FeedbackDB:
                     "instruction": f"Generate a pixel-art sprite for: {entry.prompt}",
                     "response": entry.params,
                     "rating": entry.rating,
+                    "feedback": entry.feedback,
+                    "image_path": entry.image_path,
+                    "prompt": entry.prompt,
                 }
             )
             lines.append(line)
