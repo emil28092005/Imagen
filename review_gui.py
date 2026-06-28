@@ -159,6 +159,9 @@ def _build_entry_row(entry):
                                 tag=f"feedback_{entry.id}",
                                 width=200,
                                 height=24,
+                                callback=_save_feedback_by_id,
+                                user_data=entry.id,
+                                on_enter=True,
                             )
 
                         with dpg.table_cell():
@@ -296,8 +299,27 @@ def _star_theme(color):
     return theme
 
 
+def _load_cyrillic_font():
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with dpg.font_registry():
+                    font = dpg.add_font(path, 16)
+                dpg.bind_font(font)
+                return
+            except Exception:
+                pass
+
+
 def main():
     dpg.create_context()
+    _load_cyrillic_font()
 
     global _texture_registry
     _texture_registry = dpg.add_texture_registry()
