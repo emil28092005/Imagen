@@ -3,11 +3,16 @@
 MCP server for generating pixel-art sprites using FLUX.2-klein-4B + pixel-art-lora.
 
 Tools:
-  - generate_sprite: Generate a single pixel-art sprite
-  - batch_generate:  Generate multiple sprites in one call
+  - generate_sprite:       Generate a single pixel-art sprite
+  - batch_generate:        Generate multiple sprites in one call
+  - rate_sprite:           Rate a generated sprite (1-5 stars) with optional feedback
+  - get_reference_sprites: Get highly-rated reference sprites for a prompt
+  - list_sprites:          List sprites in the feedback DB (all, unrated, or top-rated)
+  - db_stats:              Get feedback database statistics
 
 Model is loaded lazily on first call (~6s), then stays in VRAM for speed.
 Background is removed post-generation to produce transparent PNG.
+Every generated sprite is automatically saved to the feedback DB (unrated).
 """
 
 import os
@@ -18,6 +23,8 @@ from typing import Optional
 import numpy as np
 from PIL import Image
 from mcp.server.fastmcp import FastMCP
+
+from feedback import FeedbackDB
 
 # Paths — models live in a shared location
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +37,7 @@ LORA_DIR = os.environ.get(
     os.path.join(os.path.expanduser("~"), "models", "pixel-art-lora"),
 )
 OUTPUT_DIR = os.environ.get("IMAGEGEN_OUTPUT_DIR", os.path.join(BASE_DIR, "output"))
+DB_PATH = os.environ.get("IMAGEGEN_DB_PATH", os.path.join(BASE_DIR, "feedback.db"))
 
 # rsLoRA requires much lower scale in diffusers — 1.0 produces black images
 LORA_SCALE = 0.1
@@ -37,6 +45,15 @@ LORA_SCALE = 0.1
 # Global state — model loaded lazily
 _pipe = None
 _device = None
+_db: Optional[FeedbackDB] = None
+
+
+def _get_db() -> FeedbackDB:
+    global _db
+    if _db is None:
+        _db = FeedbackDB.open(DB_PATH)
+        sys.stderr.write(f"[pixel-art] Feedback DB: {DB_PATH}\n")
+    return _db
 
 
 def _get_device():
@@ -250,6 +267,20 @@ def generate_sprite(
     image.save(output_path)
     elapsed = time.time() - t0
 
+    db = _get_db()
+    entry_id = db.add(
+        prompt=prompt,
+        params={
+            "seed": seed,
+            "width": width,
+            "height": height,
+            "steps": steps,
+            "remove_bg": remove_bg,
+            "pixel_size": pixel_size,
+        },
+        image_path=output_path,
+    )
+
     return {
         "output_path": output_path,
         "seed_used": seed,
@@ -258,6 +289,8 @@ def generate_sprite(
         "size": f"{width}x{height}",
         "transparent": remove_bg,
         "pixel_size": pixel_size,
+        "db_id": entry_id,
+        "rated": False,
     }
 
 
@@ -313,6 +346,20 @@ def batch_generate(
         image.save(output_path)
         elapsed = time.time() - t0
 
+        db = _get_db()
+        entry_id = db.add(
+            prompt=prompt,
+            params={
+                "seed": seed,
+                "width": width,
+                "height": height,
+                "steps": steps,
+                "remove_bg": remove_bg,
+                "pixel_size": pixel_size,
+            },
+            image_path=output_path,
+        )
+
         results.append(
             {
                 "output_path": output_path,
@@ -321,10 +368,136 @@ def batch_generate(
                 "prompt": full_prompt,
                 "size": f"{width}x{height}",
                 "transparent": remove_bg,
+                "db_id": entry_id,
+                "rated": False,
             }
         )
 
     return results
+
+
+@mcp.tool()
+def rate_sprite(
+    db_id: str,
+    rating: int,
+    feedback: Optional[str] = None,
+) -> dict:
+    """Rate a generated sprite (1-5 stars) with optional feedback text.
+
+    Use this after reviewing a sprite to teach the system what looks good.
+    The AI uses high-rated sprites as reference when generating similar ones.
+
+    Args:
+        db_id:     The ID returned by generate_sprite or batch_generate
+        rating:    1-5 stars (5 = excellent, 1 = terrible)
+        feedback:  Optional text feedback (e.g. "great colors, bad proportions")
+
+    Returns:
+        Dict with db_id, rating, feedback, and status.
+    """
+    db = _get_db()
+    db.update_rating(db_id, rating, feedback)
+
+    return {
+        "db_id": db_id,
+        "rating": rating,
+        "feedback": feedback,
+        "status": "saved",
+    }
+
+
+@mcp.tool()
+def get_reference_sprites(
+    prompt: str,
+    limit: int = 5,
+    min_rating: int = 4,
+) -> list[dict]:
+    """Get highly-rated reference sprites from the feedback DB for a given prompt.
+
+    Use these as examples when generating similar sprites to improve quality.
+    Returns sprites with similar prompt keywords that have been rated >= min_rating.
+
+    Args:
+        prompt:      The prompt to search for (e.g. "knight", "crystal warrior")
+        limit:       Max number of results (default 5)
+        min_rating:  Minimum rating (1-5, default 4)
+
+    Returns:
+        List of dicts with db_id, prompt, rating, feedback, image_path, params.
+    """
+    db = _get_db()
+    entries = db.search_similar(prompt, limit * 2)
+    entries = [e for e in entries if e.rating >= min_rating][:limit]
+
+    if not entries:
+        return []
+
+    return [
+        {
+            "db_id": e.id,
+            "prompt": e.prompt,
+            "rating": e.rating,
+            "feedback": e.feedback,
+            "image_path": e.image_path,
+            "params": e.params,
+        }
+        for e in entries
+    ]
+
+
+@mcp.tool()
+def list_sprites(
+    filter: str = "all",
+    limit: int = 20,
+) -> list[dict]:
+    """List sprites in the feedback database.
+
+    Args:
+        filter:  "all" = all sprites, "unrated" = only unrated, "top" = highest rated
+        limit:   Max number of results (default 20)
+
+    Returns:
+        List of dicts with db_id, prompt, rating, image_path, created_at.
+    """
+    db = _get_db()
+
+    if filter == "unrated":
+        entries = db.get_unrated()
+    elif filter == "top":
+        entries = db.top_rated(limit, 1)
+    else:
+        entries = db.get_all()
+
+    entries = entries[:limit]
+
+    return [
+        {
+            "db_id": e.id,
+            "prompt": e.prompt,
+            "rating": e.rating,
+            "image_path": e.image_path,
+            "created_at": e.created_at,
+        }
+        for e in entries
+    ]
+
+
+@mcp.tool()
+def db_stats() -> dict:
+    """Get feedback database statistics.
+
+    Returns:
+        Dict with total, rated, unrated, avg_rating.
+    """
+    db = _get_db()
+    stats = db.stats()
+
+    return {
+        "total": stats.total,
+        "rated": stats.rated,
+        "unrated": stats.unrated,
+        "avg_rating": stats.avg_rating,
+    }
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ MCP server for generating pixel-art sprites with transparent backgrounds. Bring 
 - **Reproducible** — optional seed for consistent results
 - **Batch generation** — generate multiple sprites in one call
 - **MCP integration** — works with any MCP-compatible client (opencode, Claude, etc.)
+- **Feedback loop** — rate generated sprites, AI uses high-rated ones as reference
 
 ## Quick Start
 
@@ -85,9 +86,11 @@ Or configure in your MCP client:
 
 ## Tools
 
-### `generate_sprite`
+### Generation
 
-Generate a single pixel-art sprite.
+#### `generate_sprite`
+
+Generate a single pixel-art sprite. Automatically saved to feedback DB (unrated).
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -100,9 +103,46 @@ Generate a single pixel-art sprite.
 | `remove_bg` | bool | true | Remove background, make transparent |
 | `pixel_size` | int | 4 | Pixel block size (0 = off, 4 = chunky pixel-art) |
 
-### `batch_generate`
+Returns: `output_path`, `db_id`, `generation_time`, and other metadata.
 
-Generate multiple sprites in one call. Accepts a list of specs with the same parameters.
+#### `batch_generate`
+
+Generate multiple sprites in one call. Each is saved to the feedback DB.
+
+### Feedback
+
+#### `rate_sprite`
+
+Rate a generated sprite 1-5 stars with optional feedback.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `db_id` | str | required | ID returned by generate_sprite / batch_generate |
+| `rating` | int | required | 1-5 stars |
+| `feedback` | str? | null | Optional text feedback |
+
+#### `get_reference_sprites`
+
+Get highly-rated reference sprites for a prompt. The AI uses these as examples when generating similar sprites.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `prompt` | str | required | Search query (e.g. "knight") |
+| `limit` | int | 5 | Max results |
+| `min_rating` | int | 4 | Minimum rating threshold |
+
+#### `list_sprites`
+
+List sprites in the feedback database.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `filter` | str | "all" | "all", "unrated", or "top" |
+| `limit` | int | 20 | Max results |
+
+#### `db_stats`
+
+Get database statistics: total sprites, rated, unrated, average rating.
 
 ## Configuration
 

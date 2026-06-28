@@ -13,6 +13,10 @@ build/
 # Output (generated sprites)
 output/
 
+# Feedback database
+feedback.db
+feedback_dataset.jsonl
+
 # IDE
 .idea/
 .vscode/
